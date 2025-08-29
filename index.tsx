@@ -22,15 +22,19 @@ const App = () => {
     motionBlur: { pointX: 50, pointY: 50, intensity: 15 },
     depthBlur: { intensity: 5, focus: 50, invert: false, centerX: 50, centerY: 50 },
     textOverlay: { text: 'Tu texto aquí', blur: false },
-    structure: { complexity: 50, dynamism: 30, fragmentation: 20, color: '#FFFFFF', points: [] },
+    structure: { complexity: 50, dynamism: 30, fragmentation: 20, color: '#000000', points: [] },
   });
   const [colorSettings, setColorSettings] = useState({ saturation: 100, contrast: 100, exposure: 100 });
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
   const [framingOption, setFramingOption] = useState<string>('original');
+  const [framingSettings, setFramingSettings] = useState({ scale: 1, offsetX: 0, offsetY: 0 });
   const [isFramingOpen, setIsFramingOpen] = useState(true);
   const [isColorOpen, setIsColorOpen] = useState(true);
-  const [customFont, setCustomFont] = useState<{ name: string; url: string | null }>({ name: "'Work Sans'", url: null });
+  const [isHalftoneOpen, setIsHalftoneOpen] = useState(false);
+  const [isHalftoneEnabled, setIsHalftoneEnabled] = useState(false);
+  const [halftoneSettings, setHalftoneSettings] = useState({ dotSize: 8, spacing: 8 });
+  const [customFont, setCustomFont] = useState<{ name: string; url: string | null }>({ name: "'Necto Mono', monospace", url: null });
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement>(new Image());
 
@@ -73,7 +77,7 @@ const App = () => {
     if (file.type.startsWith('image/')) {
       // Reiniciar puntos y reencuadre al cargar nueva imagen
       updateSettings('structure', { points: [] });
-      setFramingOption('original');
+      handleFramingChange('original');
       setImage(file);
       setImageUrl(URL.createObjectURL(file));
     } else {
@@ -84,18 +88,18 @@ const App = () => {
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    e.currentTarget.classList.remove('border-cyan-500');
+    e.currentTarget.classList.remove('border-black');
     handleFileChange(e.dataTransfer.files);
   };
   
   const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    e.currentTarget.classList.add('border-cyan-500');
+    e.currentTarget.classList.add('border-black');
   };
 
   const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
-    e.currentTarget.classList.remove('border-cyan-500');
+    e.currentTarget.classList.remove('border-black');
   };
 
   const updateSettings = (filter: string, newSettings: any) => {
@@ -110,28 +114,44 @@ const App = () => {
     const ctx = targetCanvas.getContext('2d', { willReadFrequently: true });
     if (!ctx || !sourceImage.src || sourceImage.naturalWidth === 0) return;
 
+    const { scale, offsetX, offsetY } = framingSettings;
+
     // --- Lógica de Reencuadre ---
     let sWidth = sourceImage.naturalWidth;
     let sHeight = sourceImage.naturalHeight;
     let sx = 0;
     let sy = 0;
 
-    const aspectRatios: { [key: string]: number } = {
-      '16:9': 1920 / 1080,
-      '9:16': 1080 / 1920,
-      '3:4': 1080 / 1440,
-    };
-
-    const targetAspectRatio = aspectRatios[framing];
-    if (targetAspectRatio) {
-        const sourceAspectRatio = sWidth / sHeight;
-        if (sourceAspectRatio > targetAspectRatio) { // Imagen más ancha que el destino
-            sWidth = sHeight * targetAspectRatio;
-            sx = (sourceImage.naturalWidth - sWidth) / 2;
-        } else { // Imagen más alta o con el mismo aspect ratio
-            sHeight = sWidth / targetAspectRatio;
-            sy = (sourceImage.naturalHeight - sHeight) / 2;
+    if (framing !== 'original') {
+        const aspectRatios: { [key: string]: number } = {
+          '16:9': 16 / 9,
+          '9:16': 9 / 16,
+          '3:4': 3 / 4,
+        };
+        const targetAspectRatio = aspectRatios[framing];
+        const sourceAspectRatio = sourceImage.naturalWidth / sourceImage.naturalHeight;
+    
+        let baseSWidth, baseSHeight;
+    
+        if (sourceAspectRatio > targetAspectRatio) {
+            baseSHeight = sourceImage.naturalHeight;
+            baseSWidth = sourceImage.naturalHeight * targetAspectRatio;
+        } else {
+            baseSWidth = sourceImage.naturalWidth;
+            baseSHeight = sourceImage.naturalWidth / targetAspectRatio;
         }
+    
+        sWidth = baseSWidth / scale;
+        sHeight = baseSHeight / scale;
+    
+        const pannableWidth = sourceImage.naturalWidth - sWidth;
+        const pannableHeight = sourceImage.naturalHeight - sHeight;
+    
+        sx = (pannableWidth / 2) * (1 + offsetX / 100);
+        sy = (pannableHeight / 2) * (1 + offsetY / 100);
+    
+        sx = isNaN(sx) ? 0 : sx;
+        sy = isNaN(sy) ? 0 : sy;
     }
     // --- Fin Lógica de Reencuadre ---
 
@@ -140,9 +160,16 @@ const App = () => {
         const parent = targetCanvas.parentElement;
         if (!parent) return;
 
-        const hRatio = parent.clientWidth / sWidth;
-        const vRatio = parent.clientHeight / sHeight;
-        const ratio = Math.min(hRatio, vRatio, 1);
+        const containerAspectRatio = parent.clientWidth / parent.clientHeight;
+        const sAspectRatio = sWidth / sHeight;
+        
+        let ratio;
+        if (containerAspectRatio > sAspectRatio) {
+            ratio = parent.clientHeight / sHeight;
+        } else {
+            ratio = parent.clientWidth / sWidth;
+        }
+        ratio = Math.min(ratio, 1);
 
         targetCanvas.width = sWidth * ratio;
         targetCanvas.height = sHeight * ratio;
@@ -319,7 +346,7 @@ const App = () => {
           const { text, blur } = filterSettings.textOverlay;
           ctx.filter = blur ? `blur(2px)` : 'none';
           const fontSize = Math.max(24, targetCanvas.width / 25);
-          ctx.font = `bold ${fontSize}px ${customFont.name}, 'Work Sans'`;
+          ctx.font = `bold ${fontSize}px ${customFont.name}`;
           ctx.textAlign = 'center';
           ctx.fillStyle = 'white';
           // Se elimina el borde (strokeStyle, lineWidth, strokeText)
@@ -338,7 +365,7 @@ const App = () => {
         ctx.lineWidth = Math.max(0.5, targetCanvas.width / 800);
         const pointSize = Math.max(1, targetCanvas.width / 300);
         const textFontSize = Math.max(8, targetCanvas.width / 100);
-        ctx.font = `${textFontSize}px 'Noto Sans Mono', monospace`;
+        ctx.font = `${textFontSize}px monospace`;
         ctx.textAlign = 'left';
 
         const pointsToDraw = points.filter((_: any, i: number) => i < points.length * (complexity / 100));
@@ -398,7 +425,48 @@ const App = () => {
     }
     ctx.restore();
 
-    // 4. Aplicar granulado
+    // 4. Aplicar Semitono
+    if (isHalftoneEnabled) {
+        const { dotSize, spacing } = halftoneSettings;
+        if (spacing > 0) {
+            const imageData = ctx.getImageData(0, 0, targetCanvas.width, targetCanvas.height);
+            const data = imageData.data;
+            const width = targetCanvas.width;
+            const height = targetCanvas.height;
+    
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, width, height);
+            ctx.fillStyle = 'black';
+    
+            for (let y = 0; y < height; y += spacing) {
+                for (let x = 0; x < width; x += spacing) {
+                    let totalBrightness = 0;
+                    let pixelCount = 0;
+                    for (let blockY = y; blockY < y + spacing && blockY < height; blockY++) {
+                        for (let blockX = x; blockX < x + spacing && blockX < width; blockX++) {
+                            const index = (blockY * width + blockX) * 4;
+                            const r = data[index];
+                            const g = data[index + 1];
+                            const b = data[index + 2];
+                            totalBrightness += (0.299 * r + 0.587 * g + 0.114 * b);
+                            pixelCount++;
+                        }
+                    }
+            
+                    const avgBrightness = (totalBrightness / pixelCount) / 255;
+                    const radius = (dotSize / 2) * (1 - avgBrightness);
+            
+                    if (radius > 0) {
+                        ctx.beginPath();
+                        ctx.arc(x + spacing / 2, y + spacing / 2, radius, 0, 2 * Math.PI, true);
+                        ctx.fill();
+                    }
+                }
+            }
+        }
+    }
+
+    // 5. Aplicar granulado
     const finalImageData = ctx.getImageData(0, 0, targetCanvas.width, targetCanvas.height);
     const finalData = finalImageData.data;
     const grainAmount = 25;
@@ -409,7 +477,7 @@ const App = () => {
         finalData[i+2] = Math.max(0, Math.min(255, finalData[i+2] + grain));
     }
     ctx.putImageData(finalImageData, 0, 0);
-  }, [activeFilter, filterSettings, colorSettings, customFont]);
+  }, [activeFilter, filterSettings, colorSettings, customFont, framingSettings, isHalftoneEnabled, halftoneSettings]);
 
 
   // Hook principal para renderizar el canvas visible
@@ -431,7 +499,7 @@ const App = () => {
     } else {
       render();
     }
-  }, [imageUrl, applyAllEffects, framingOption, filterSettings, colorSettings, activeFilter, customFont]);
+  }, [imageUrl, applyAllEffects, framingOption, filterSettings, colorSettings, activeFilter, customFont, framingSettings, isHalftoneEnabled, halftoneSettings]);
   
   // Analizar estructura con Gemini
   const analyzeStructure = useCallback(async () => {
@@ -447,7 +515,7 @@ const App = () => {
             const response = await ai.models.generateContent({
                 model: 'gemini-2.5-flash',
                 contents: { parts: [
-                    { text: `Analiza esta imagen e identifica los puntos estructurales clave de los objetos o personas principales. Devuelve la respuesta como un objeto JSON con una única clave "points", que es un array de objetos. Cada objeto debe tener propiedades "x" e "y" que representen coordenadas normalizadas (de 0 a 1). Ejemplo: {"points": [{"x": 0.5, "y": 0.25}]}. Proporciona al menos 30 puntos si es posible.` },
+                    { text: `Analiza esta imagen e identifica nodos estructurales clave. Estos nodos deben anclarse en las áreas de mayor contraste que definen aspectos relevantes de la foto, como los bordes nítidos de objetos y sujetos. Prioriza puntos en extremidades y partes del cuerpo humano, así como en objetos predominantes con contornos definidos (plantas, árboles, sillas, edificios, etc.), tanto humanos como no humanos. Devuelve la respuesta como un objeto JSON con una única clave "points", que es un array de objetos. Cada objeto debe tener propiedades "x" e "y" que representen coordenadas normalizadas (de 0 a 1). Ejemplo: {"points": [{"x": 0.5, "y": 0.25}]}. Proporciona al menos 30 puntos si es posible.` },
                     { inlineData: { mimeType: image.type, data: base64data } }
                 ]},
                 config: { responseMimeType: "application/json", responseSchema: {
@@ -539,6 +607,11 @@ const App = () => {
 
     setCustomFont({ name: `'${fontName}'`, url: fontUrl });
   };
+  
+  const handleFramingChange = (option: string) => {
+    setFramingOption(option);
+    setFramingSettings({ scale: 1, offsetX: 0, offsetY: 0 });
+  };
 
 
   const renderControls = () => {
@@ -548,36 +621,36 @@ const App = () => {
               const s = filterSettings.motionBlur;
               return (<>
                   <h3 className="text-lg font-semibold mb-2">Desenfoque de Movimiento</h3>
-                  <label className="block mb-1 text-sm">Posición Foco X: {s.pointX}</label>
+                  <label className="block mb-1 text-sm text-gray-600">Posición Foco X: {s.pointX}</label>
                   <input type="range" min="0" max="100" value={s.pointX} onChange={(e) => updateSettings('motionBlur', { pointX: parseInt(e.target.value) })} className="w-full" />
-                  <label className="block mt-4 mb-1 text-sm">Posición Foco Y: {s.pointY}</label>
+                  <label className="block mt-4 mb-1 text-sm text-gray-600">Posición Foco Y: {s.pointY}</label>
                   <input type="range" min="0" max="100" value={s.pointY} onChange={(e) => updateSettings('motionBlur', { pointY: parseInt(e.target.value) })} className="w-full" />
-                  <label className="block mt-4 mb-1 text-sm">Intensidad: {s.intensity}</label>
+                  <label className="block mt-4 mb-1 text-sm text-gray-600">Intensidad: {s.intensity}</label>
                   <input type="range" min="0" max="50" value={s.intensity} onChange={(e) => updateSettings('motionBlur', { intensity: parseInt(e.target.value) })} className="w-full" />
               </>);
           case FILTERS.DEPTH_BLUR:
               const d = filterSettings.depthBlur;
               return (<>
                   <h3 className="text-lg font-semibold mb-2">Profundidad de Campo</h3>
-                  <label className="block mb-1 text-sm">Intensidad Desenfoque: {d.intensity}</label>
+                  <label className="block mb-1 text-sm text-gray-600">Intensidad Desenfoque: {d.intensity}</label>
                   <input type="range" min="0" max="20" value={d.intensity} onChange={(e) => updateSettings('depthBlur', { intensity: parseInt(e.target.value) })} className="w-full" />
-                  <label className="block mt-4 mb-1 text-sm">Profundidad de Foco: {d.focus}</label>
+                  <label className="block mt-4 mb-1 text-sm text-gray-600">Profundidad de Foco: {d.focus}</label>
                   <input type="range" min="0" max="100" value={d.focus} onChange={(e) => updateSettings('depthBlur', { focus: parseInt(e.target.value) })} className="w-full" />
-                  <label className="block mt-4 mb-1 text-sm">Posición Foco X: {d.centerX}</label>
+                  <label className="block mt-4 mb-1 text-sm text-gray-600">Posición Foco X: {d.centerX}</label>
                   <input type="range" min="0" max="100" value={d.centerX} onChange={(e) => updateSettings('depthBlur', { centerX: parseInt(e.target.value) })} className="w-full" />
-                  <label className="block mt-4 mb-1 text-sm">Posición Foco Y: {d.centerY}</label>
+                  <label className="block mt-4 mb-1 text-sm text-gray-600">Posición Foco Y: {d.centerY}</label>
                   <input type="range" min="0" max="100" value={d.centerY} onChange={(e) => updateSettings('depthBlur', { centerY: parseInt(e.target.value) })} className="w-full" />
                   <div className="flex items-center mt-4">
-                    <input type="checkbox" id="depthBlurInvert" checked={d.invert} onChange={(e) => updateSettings('depthBlur', { invert: e.target.checked })} className="mr-2 h-4 w-4" />
-                    <label htmlFor="depthBlurInvert">Invertir Desenfoque</label>
+                    <input type="checkbox" id="depthBlurInvert" checked={d.invert} onChange={(e) => updateSettings('depthBlur', { invert: e.target.checked })} className="mr-2 h-4 w-4 accent-black" />
+                    <label htmlFor="depthBlurInvert" className="text-sm">Invertir Desenfoque</label>
                   </div>
               </>);
           case FILTERS.TEXT_OVERLAY:
             const t = filterSettings.textOverlay;
             return (<>
                 <h3 className="text-lg font-semibold mb-2">Texto Aleatorio</h3>
-                <textarea value={t.text} onChange={(e) => updateSettings('textOverlay', { text: e.target.value })} className="w-full bg-gray-700 p-2 rounded text-gray-200" rows={3}></textarea>
-                <div className="flex items-center mt-4"><input type="checkbox" id="textBlur" checked={t.blur} onChange={(e) => updateSettings('textOverlay', { blur: e.target.checked })} className="mr-2 h-4 w-4" /><label htmlFor="textBlur">Desenfoque Gaussiano</label></div>
+                <textarea value={t.text} onChange={(e) => updateSettings('textOverlay', { text: e.target.value })} className="w-full bg-gray-50 p-2 border border-gray-300 text-black placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-black" rows={3}></textarea>
+                <div className="flex items-center mt-4"><input type="checkbox" id="textBlur" checked={t.blur} onChange={(e) => updateSettings('textOverlay', { blur: e.target.checked })} className="mr-2 h-4 w-4 accent-black" /><label htmlFor="textBlur" className="text-sm">Desenfoque Gaussiano</label></div>
                 <div className="mt-4">
                   <label htmlFor="font-upload" className="block mb-2 text-sm font-medium">Fuente Personalizada</label>
                   <input 
@@ -585,7 +658,7 @@ const App = () => {
                       type="file" 
                       accept=".ttf,.otf,.woff,.woff2"
                       onChange={handleFontUpload}
-                      className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-cyan-500 file:text-white hover:file:bg-cyan-600 cursor-pointer"
+                      className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:border file:border-black file:text-sm file:font-semibold file:bg-white file:text-black hover:file:bg-gray-100 cursor-pointer"
                   />
                   <p className="mt-1 text-xs text-gray-500">
                       Fuente actual: {customFont.name.replace(/'/g, '').replace('user-font-', 'Cargada ')}
@@ -596,92 +669,139 @@ const App = () => {
             const st = filterSettings.structure;
             return (<>
                 <h3 className="text-lg font-semibold mb-2">Análisis Estructural</h3>
-                {isLoading && <p className="text-cyan-400 animate-pulse">{loadingMessage || 'Procesando...'}</p>}
-                <label className="block mb-1 text-sm">Complejidad: {st.complexity}%</label>
+                {isLoading && <p className="text-gray-600 animate-pulse">{loadingMessage || 'Procesando...'}</p>}
+                <label className="block mb-1 text-sm text-gray-600">Complejidad: {st.complexity}%</label>
                 <input type="range" min="1" max="100" value={st.complexity} onChange={(e) => updateSettings('structure', { complexity: parseInt(e.target.value) })} className="w-full" />
-                <label className="block mt-4 mb-1 text-sm">Dinamismo: {st.dynamism}%</label>
+                <label className="block mt-4 mb-1 text-sm text-gray-600">Dinamismo: {st.dynamism}%</label>
                 <input type="range" min="0" max="100" value={st.dynamism} onChange={(e) => updateSettings('structure', { dynamism: parseInt(e.target.value) })} className="w-full" />
-                <label className="block mt-4 mb-1 text-sm">Fragmentación: {st.fragmentation}%</label>
+                <label className="block mt-4 mb-1 text-sm text-gray-600">Fragmentación: {st.fragmentation}%</label>
                 <input type="range" min="0" max="100" value={st.fragmentation} onChange={(e) => updateSettings('structure', { fragmentation: parseInt(e.target.value) })} className="w-full" />
-                <label className="block mt-4 mb-1 text-sm">Color</label>
-                <input type="color" value={st.color} onChange={(e) => updateSettings('structure', { color: e.target.value })} className="w-full bg-gray-700 rounded h-10" />
+                <label className="block mt-4 mb-1 text-sm text-gray-600">Color</label>
+                <input type="color" value={st.color} onChange={(e) => updateSettings('structure', { color: e.target.value })} className="w-full bg-white border border-gray-300 h-10" />
             </>);
           default: return null;
       }
   };
 
   return (
-    <div className="min-h-screen bg-gray-900 text-gray-200 flex flex-col p-4 md:p-8" style={{ fontFamily: "'Work Sans', sans-serif" }}>
+    <div className="min-h-screen bg-white text-black flex flex-col p-4 md:p-8">
       <header className="text-center mb-6">
-        <h1 className="text-4xl font-bold tracking-tight animate-fadeInUp will-change-transform">Efecto Filtro Fotos</h1>
-        <p className="text-gray-400 mt-1 animate-fadeInUp will-change-transform" style={{animationDelay: '150ms'}}>Sube una imagen y aplica filtros artísticos en tiempo real.</p>
+        <h1 className="text-4xl font-bold tracking-tight">Efecto Filtro Fotos</h1>
+        <p className="text-gray-500 mt-1">Sube una imagen y aplica filtros artísticos en tiempo real.</p>
       </header>
-      <main className="flex-grow grid grid-cols-1 lg:grid-cols-3 gap-8 animate-fadeIn" style={{animationDelay: '300ms'}}>
-        <div className="lg:col-span-2 bg-black rounded-lg p-2 flex justify-center items-center min-h-[400px] lg:h-auto transition-all duration-500 relative">
+      <main className="flex-grow grid grid-cols-1 lg:grid-cols-3 gap-8 animate-fadeIn">
+        <div className="lg:col-span-2 bg-gray-100 p-2 flex justify-center items-center min-h-[400px] lg:h-auto transition-all duration-500 relative">
           {isLoading && !imageUrl && (
-            <div className="absolute inset-0 bg-gray-900 bg-opacity-80 flex justify-center items-center z-10 rounded-lg">
-                <p className="text-cyan-400 text-xl animate-pulse">{loadingMessage || 'Procesando...'}</p>
+            <div className="absolute inset-0 bg-white bg-opacity-80 flex justify-center items-center z-10">
+                <p className="text-gray-600 text-xl animate-pulse">{loadingMessage || 'Procesando...'}</p>
             </div>
           )}
           {!imageUrl ? (
-             <div onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={handleDragLeave} className="w-full h-full border-4 border-dashed border-gray-600 rounded-lg flex flex-col justify-center items-center text-center cursor-pointer transition-colors duration-300 animate-scaleIn">
+             <div onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={handleDragLeave} className="w-full h-full border-2 border-dashed border-gray-300 flex flex-col justify-center items-center text-center cursor-pointer transition-colors duration-300">
                 <input type="file" id="file-upload" className="hidden" accept="image/*,.heic,.heif" onChange={(e) => handleFileChange(e.target.files)} />
                 <label htmlFor="file-upload" className="cursor-pointer p-8">
                     <p className="text-2xl font-semibold">Arrastra y suelta una imagen</p>
-                    <p className="text-gray-400 mt-2">o haz clic para seleccionar un archivo</p>
+                    <p className="text-gray-500 mt-2">o haz clic para seleccionar un archivo</p>
                 </label>
              </div>
-          ) : (<div className="w-full h-full flex justify-center items-center animate-scaleIn"><canvas ref={canvasRef} className="max-w-full max-h-full object-contain rounded"></canvas></div>)}
+          ) : (<div className="w-full h-full flex justify-center items-center"><canvas ref={canvasRef} className="max-w-full max-h-full object-contain"></canvas></div>)}
         </div>
-        <div className="bg-gray-800 rounded-lg p-6 flex flex-col">
-          <h2 className="text-2xl font-semibold mb-4 border-b border-gray-700 pb-3">Panel de Control</h2>
+        <div className="bg-white p-6 flex flex-col border border-gray-200">
+          <h2 className="text-2xl font-semibold mb-4 border-b border-gray-200 pb-3">Panel de Control</h2>
           {image ? (
             <div className="flex-grow flex flex-col">
                 <div className="mb-6">
                     <button 
                         onClick={() => setIsFramingOpen(!isFramingOpen)}
-                        className="w-full flex justify-between items-center text-left text-lg font-semibold mb-3 p-2 bg-gray-700 rounded hover:bg-gray-600 transition-colors"
+                        className="w-full flex justify-between items-center text-left text-lg font-semibold mb-3 p-2 hover:bg-gray-100 transition-colors"
                     >
                         Reencuadre
                         <svg className={`w-5 h-5 transition-transform duration-300 ${isFramingOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
                     </button>
                     {isFramingOpen && (
-                        <div className="grid grid-cols-2 gap-2 animate-fadeIn">
-                            <button onClick={() => setFramingOption('original')} className={`p-2 rounded text-xs font-semibold transition-all duration-200 ${framingOption === 'original' ? 'bg-cyan-500 text-white' : 'bg-gray-600 hover:bg-gray-500'}`}>Original</button>
-                            <button onClick={() => setFramingOption('16:9')} className={`p-2 rounded text-xs font-semibold transition-all duration-200 ${framingOption === '16:9' ? 'bg-cyan-500 text-white' : 'bg-gray-600 hover:bg-gray-500'}`}>Horizontal (1920x1080)</button>
-                            <button onClick={() => setFramingOption('9:16')} className={`p-2 rounded text-xs font-semibold transition-all duration-200 ${framingOption === '9:16' ? 'bg-cyan-500 text-white' : 'bg-gray-600 hover:bg-gray-500'}`}>Story (1080x1920)</button>
-                            <button onClick={() => setFramingOption('3:4')} className={`p-2 rounded text-xs font-semibold transition-all duration-200 ${framingOption === '3:4' ? 'bg-cyan-500 text-white' : 'bg-gray-600 hover:bg-gray-500'}`}>Feed (1080x1440)</button>
+                        <div className="space-y-4 animate-fadeIn">
+                          <div className="grid grid-cols-2 gap-2">
+                              <button onClick={() => handleFramingChange('original')} className={`p-2 text-xs font-semibold transition-colors duration-200 border ${framingOption === 'original' ? 'bg-black text-white border-black' : 'bg-white text-black border-gray-300 hover:bg-gray-100'}`}>Original</button>
+                              <button onClick={() => handleFramingChange('16:9')} className={`p-2 text-xs font-semibold transition-colors duration-200 border ${framingOption === '16:9' ? 'bg-black text-white border-black' : 'bg-white text-black border-gray-300 hover:bg-gray-100'}`}>Horizontal (1920x1080)</button>
+                              <button onClick={() => handleFramingChange('9:16')} className={`p-2 text-xs font-semibold transition-colors duration-200 border ${framingOption === '9:16' ? 'bg-black text-white border-black' : 'bg-white text-black border-gray-300 hover:bg-gray-100'}`}>Story (1080x1920)</button>
+                              <button onClick={() => handleFramingChange('3:4')} className={`p-2 text-xs font-semibold transition-colors duration-200 border ${framingOption === '3:4' ? 'bg-black text-white border-black' : 'bg-white text-black border-gray-300 hover:bg-gray-100'}`}>Feed (1080x1440)</button>
+                          </div>
+                          {framingOption !== 'original' && (
+                            <div className="pt-4 mt-4 border-t border-gray-200 animate-fadeIn space-y-4">
+                                <div>
+                                    <label className="block mb-1 text-sm text-gray-600">Escala: {framingSettings.scale.toFixed(2)}x</label>
+                                    <input type="range" min="1" max="3" step="0.01" value={framingSettings.scale} onChange={(e) => setFramingSettings(prev => ({ ...prev, scale: parseFloat(e.target.value) }))} className="w-full" />
+                                </div>
+                                <div>
+                                    <label className="block mb-1 text-sm text-gray-600">Desplazar X: {framingSettings.offsetX}</label>
+                                    <input type="range" min="-100" max="100" value={framingSettings.offsetX} onChange={(e) => setFramingSettings(prev => ({ ...prev, offsetX: parseInt(e.target.value) }))} className="w-full" />
+                                </div>
+                                <div>
+                                    <label className="block mb-1 text-sm text-gray-600">Desplazar Y: {framingSettings.offsetY}</label>
+                                    <input type="range" min="-100" max="100" value={framingSettings.offsetY} onChange={(e) => setFramingSettings(prev => ({ ...prev, offsetY: parseInt(e.target.value) }))} className="w-full" />
+                                </div>
+                            </div>
+                          )}
                         </div>
                     )}
                 </div>
                  <div className="mb-6">
                     <button 
                         onClick={() => setIsColorOpen(!isColorOpen)}
-                        className="w-full flex justify-between items-center text-left text-lg font-semibold mb-3 p-2 bg-gray-700 rounded hover:bg-gray-600 transition-colors"
+                        className="w-full flex justify-between items-center text-left text-lg font-semibold mb-3 p-2 hover:bg-gray-100 transition-colors"
                     >
                         Color
                         <svg className={`w-5 h-5 transition-transform duration-300 ${isColorOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
                     </button>
                     {isColorOpen && (
                         <div className="animate-fadeIn">
-                            <label className="block mb-1 text-sm">Saturación: {colorSettings.saturation}%</label>
+                            <label className="block mb-1 text-sm text-gray-600">Saturación: {colorSettings.saturation}%</label>
                             <input type="range" min="0" max="200" value={colorSettings.saturation} onChange={(e) => setColorSettings(prev => ({...prev, saturation: parseInt(e.target.value)}))} className="w-full" />
-                            <label className="block mt-4 mb-1 text-sm">Contraste: {colorSettings.contrast}%</label>
+                            <label className="block mt-4 mb-1 text-sm text-gray-600">Contraste: {colorSettings.contrast}%</label>
                             <input type="range" min="0" max="200" value={colorSettings.contrast} onChange={(e) => setColorSettings(prev => ({...prev, contrast: parseInt(e.target.value)}))} className="w-full" />
-                            <label className="block mt-4 mb-1 text-sm">Exposición: {colorSettings.exposure}%</label>
+                            <label className="block mt-4 mb-1 text-sm text-gray-600">Exposición: {colorSettings.exposure}%</label>
                             <input type="range" min="50" max="250" value={colorSettings.exposure} onChange={(e) => setColorSettings(prev => ({...prev, exposure: parseInt(e.target.value)}))} className="w-full" />
                         </div>
                     )}
                 </div>
                 <div className="mb-6"><h3 className="text-lg font-semibold mb-3">Seleccionar Filtro</h3>
                     <div className="grid grid-cols-2 gap-2">
-                        {Object.values(FILTERS).map(f => (<button key={f} onClick={() => setActiveFilter(f)} className={`p-2 rounded text-sm font-semibold transition-all duration-200 ease-in-out transform will-change-transform hover:scale-105 active:scale-95 ${activeFilter === f ? 'bg-cyan-500 text-white shadow-lg' : 'bg-gray-700 hover:bg-gray-600'}`}>{f}</button>))}
+                        {Object.values(FILTERS).map(f => (<button key={f} onClick={() => setActiveFilter(f)} className={`p-2 text-sm font-semibold transition-colors duration-200 border ${activeFilter === f ? 'bg-black text-white border-black' : 'bg-white text-black border-gray-300 hover:bg-gray-100'}`}>{f}</button>))}
                     </div>
                 </div>
                 <div key={activeFilter} className="flex-grow mb-6 animate-fadeIn">{renderControls()}</div>
-                <button onClick={exportToPNG} className="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-3 px-4 rounded transition-all duration-200 ease-in-out transform will-change-transform hover:scale-105 active:scale-95">Exportar a PNG</button>
+                <div className="mb-6">
+                    <button 
+                        onClick={() => setIsHalftoneOpen(!isHalftoneOpen)}
+                        className="w-full flex justify-between items-center text-left text-lg font-semibold mb-3 p-2 hover:bg-gray-100 transition-colors"
+                    >
+                        Semitono
+                        <svg className={`w-5 h-5 transition-transform duration-300 ${isHalftoneOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+                    </button>
+                    {isHalftoneOpen && (
+                        <div className="animate-fadeIn space-y-4">
+                            <div className="flex items-center">
+                                <input type="checkbox" id="halftone-enable" checked={isHalftoneEnabled} onChange={(e) => setIsHalftoneEnabled(e.target.checked)} className="mr-2 h-4 w-4 accent-black" />
+                                <label htmlFor="halftone-enable" className="text-sm">Activar efecto Semitono</label>
+                            </div>
+                            {isHalftoneEnabled && (
+                                <div className="pt-4 mt-4 border-t border-gray-200 animate-fadeIn space-y-4">
+                                    <div>
+                                        <label className="block mb-1 text-sm text-gray-600">Tamaño del punto: {halftoneSettings.dotSize}</label>
+                                        <input type="range" min="2" max="40" step="1" value={halftoneSettings.dotSize} onChange={(e) => setHalftoneSettings(prev => ({ ...prev, dotSize: parseInt(e.target.value) }))} className="w-full" />
+                                    </div>
+                                    <div>
+                                        <label className="block mt-4 mb-1 text-sm text-gray-600">Espaciado: {halftoneSettings.spacing}</label>
+                                        <input type="range" min="2" max="40" step="1" value={halftoneSettings.spacing} onChange={(e) => setHalftoneSettings(prev => ({ ...prev, spacing: parseInt(e.target.value) }))} className="w-full" />
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+                <button onClick={exportToPNG} className="w-full bg-black hover:bg-gray-800 text-white font-bold py-3 px-4 transition-colors duration-200">Exportar a PNG</button>
             </div>
-          ) : (<p className="text-gray-400 text-center mt-8 animate-fadeIn">Sube una imagen para empezar a editar.</p>)}
+          ) : (<p className="text-gray-500 text-center mt-8 animate-fadeIn">Sube una imagen para empezar a editar.</p>)}
         </div>
       </main>
     </div>

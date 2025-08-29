@@ -1,0 +1,5 @@
+{
+  "name": "Efecto Filtro Fotos",
+  "description": "An advanced photo editor that allows users to upload an image and apply one of four real-time artistic filters: Motion Blur, Depth Blur, Text Overlay, and AI-powered Structural Analysis. The app features a global film grain effect and allows exporting the final result as a PDF.",
+  "requestFramePermissions": []
+}

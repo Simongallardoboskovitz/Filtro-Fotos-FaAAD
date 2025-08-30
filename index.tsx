@@ -31,9 +31,6 @@ const App = () => {
   const [framingSettings, setFramingSettings] = useState({ scale: 1, offsetX: 0, offsetY: 0 });
   const [isFramingOpen, setIsFramingOpen] = useState(true);
   const [isColorOpen, setIsColorOpen] = useState(true);
-  const [isHalftoneOpen, setIsHalftoneOpen] = useState(false);
-  const [isHalftoneEnabled, setIsHalftoneEnabled] = useState(false);
-  const [halftoneSettings, setHalftoneSettings] = useState({ dotSize: 8, spacing: 8 });
   const [customFont, setCustomFont] = useState<{ name: string; url: string | null }>({ name: "'Necto Mono', monospace", url: null });
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement>(new Image());
@@ -425,48 +422,7 @@ const App = () => {
     }
     ctx.restore();
 
-    // 4. Aplicar Semitono
-    if (isHalftoneEnabled) {
-        const { dotSize, spacing } = halftoneSettings;
-        if (spacing > 0) {
-            const imageData = ctx.getImageData(0, 0, targetCanvas.width, targetCanvas.height);
-            const data = imageData.data;
-            const width = targetCanvas.width;
-            const height = targetCanvas.height;
-    
-            ctx.fillStyle = 'white';
-            ctx.fillRect(0, 0, width, height);
-            ctx.fillStyle = 'black';
-    
-            for (let y = 0; y < height; y += spacing) {
-                for (let x = 0; x < width; x += spacing) {
-                    let totalBrightness = 0;
-                    let pixelCount = 0;
-                    for (let blockY = y; blockY < y + spacing && blockY < height; blockY++) {
-                        for (let blockX = x; blockX < x + spacing && blockX < width; blockX++) {
-                            const index = (blockY * width + blockX) * 4;
-                            const r = data[index];
-                            const g = data[index + 1];
-                            const b = data[index + 2];
-                            totalBrightness += (0.299 * r + 0.587 * g + 0.114 * b);
-                            pixelCount++;
-                        }
-                    }
-            
-                    const avgBrightness = (totalBrightness / pixelCount) / 255;
-                    const radius = (dotSize / 2) * (1 - avgBrightness);
-            
-                    if (radius > 0) {
-                        ctx.beginPath();
-                        ctx.arc(x + spacing / 2, y + spacing / 2, radius, 0, 2 * Math.PI, true);
-                        ctx.fill();
-                    }
-                }
-            }
-        }
-    }
-
-    // 5. Aplicar granulado
+    // 4. Aplicar granulado
     const finalImageData = ctx.getImageData(0, 0, targetCanvas.width, targetCanvas.height);
     const finalData = finalImageData.data;
     const grainAmount = 25;
@@ -477,7 +433,7 @@ const App = () => {
         finalData[i+2] = Math.max(0, Math.min(255, finalData[i+2] + grain));
     }
     ctx.putImageData(finalImageData, 0, 0);
-  }, [activeFilter, filterSettings, colorSettings, customFont, framingSettings, isHalftoneEnabled, halftoneSettings]);
+  }, [activeFilter, filterSettings, colorSettings, customFont, framingSettings]);
 
 
   // Hook principal para renderizar el canvas visible
@@ -499,7 +455,7 @@ const App = () => {
     } else {
       render();
     }
-  }, [imageUrl, applyAllEffects, framingOption, filterSettings, colorSettings, activeFilter, customFont, framingSettings, isHalftoneEnabled, halftoneSettings]);
+  }, [imageUrl, applyAllEffects, framingOption, filterSettings, colorSettings, activeFilter, customFont, framingSettings]);
   
   // Analizar estructura con Gemini
   const analyzeStructure = useCallback(async () => {
@@ -515,13 +471,13 @@ const App = () => {
             const response = await ai.models.generateContent({
                 model: 'gemini-2.5-flash',
                 contents: { parts: [
-                    { text: `Analiza esta imagen e identifica nodos estructurales clave. Estos nodos deben anclarse en las áreas de mayor contraste que definen aspectos relevantes de la foto, como los bordes nítidos de objetos y sujetos. Prioriza puntos en extremidades y partes del cuerpo humano, así como en objetos predominantes con contornos definidos (plantas, árboles, sillas, edificios, etc.), tanto humanos como no humanos. Devuelve la respuesta como un objeto JSON con una única clave "points", que es un array de objetos. Cada objeto debe tener propiedades "x" e "y" que representen coordenadas normalizadas (de 0 a 1). Ejemplo: {"points": [{"x": 0.5, "y": 0.25}]}. Proporciona al menos 30 puntos si es posible.` },
+                    { text: `Analiza esta imagen e identifica entre 30 y 50 nodos estructurales clave. Estos nodos deben anclarse en las áreas de mayor contraste que definen los contornos de objetos y sujetos. Devuelve un objeto JSON con una única clave "points", que es un array de objetos. Cada objeto debe tener las propiedades "x" e "y" con coordenadas normalizadas (de 0 a 1). Ejemplo: {"points": [{"x": 0.5, "y": 0.25}]}` },
                     { inlineData: { mimeType: image.type, data: base64data } }
                 ]},
                 config: { responseMimeType: "application/json", responseSchema: {
                     type: Type.OBJECT, properties: { points: { type: Type.ARRAY, items: {
-                        type: Type.OBJECT, properties: { x: { type: Type.NUMBER }, y: { type: Type.NUMBER } }, required: ['x', 'y']
-                    }}}, required: ['points']
+                        type: Type.OBJECT, properties: { x: { type: Type.NUMBER }, y: { type: Type.NUMBER } }
+                    }}}
                 }}
             });
             const jsonText = response.text.trim();
@@ -770,35 +726,6 @@ const App = () => {
                     </div>
                 </div>
                 <div key={activeFilter} className="flex-grow mb-6 animate-fadeIn">{renderControls()}</div>
-                <div className="mb-6">
-                    <button 
-                        onClick={() => setIsHalftoneOpen(!isHalftoneOpen)}
-                        className="w-full flex justify-between items-center text-left text-lg font-semibold mb-3 p-2 hover:bg-gray-100 transition-colors"
-                    >
-                        Semitono
-                        <svg className={`w-5 h-5 transition-transform duration-300 ${isHalftoneOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
-                    </button>
-                    {isHalftoneOpen && (
-                        <div className="animate-fadeIn space-y-4">
-                            <div className="flex items-center">
-                                <input type="checkbox" id="halftone-enable" checked={isHalftoneEnabled} onChange={(e) => setIsHalftoneEnabled(e.target.checked)} className="mr-2 h-4 w-4 accent-black" />
-                                <label htmlFor="halftone-enable" className="text-sm">Activar efecto Semitono</label>
-                            </div>
-                            {isHalftoneEnabled && (
-                                <div className="pt-4 mt-4 border-t border-gray-200 animate-fadeIn space-y-4">
-                                    <div>
-                                        <label className="block mb-1 text-sm text-gray-600">Tamaño del punto: {halftoneSettings.dotSize}</label>
-                                        <input type="range" min="2" max="40" step="1" value={halftoneSettings.dotSize} onChange={(e) => setHalftoneSettings(prev => ({ ...prev, dotSize: parseInt(e.target.value) }))} className="w-full" />
-                                    </div>
-                                    <div>
-                                        <label className="block mt-4 mb-1 text-sm text-gray-600">Espaciado: {halftoneSettings.spacing}</label>
-                                        <input type="range" min="2" max="40" step="1" value={halftoneSettings.spacing} onChange={(e) => setHalftoneSettings(prev => ({ ...prev, spacing: parseInt(e.target.value) }))} className="w-full" />
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    )}
-                </div>
                 <button onClick={exportToPNG} className="w-full bg-black hover:bg-gray-800 text-white font-bold py-3 px-4 transition-colors duration-200">Exportar a PNG</button>
             </div>
           ) : (<p className="text-gray-500 text-center mt-8 animate-fadeIn">Sube una imagen para empezar a editar.</p>)}

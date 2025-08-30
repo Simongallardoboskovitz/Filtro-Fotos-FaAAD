@@ -11,6 +11,8 @@ const FILTERS = {
   PORTRAIT_BLUR_AI: 'Desenfoque de Retrato (IA)',
   TEXT_OVERLAY: 'Superposición de Texto',
   STRUCTURE: 'Análisis Estructural',
+  GAMMA: 'Corrección de Gama',
+  GLITCH: 'Glitch',
 };
 
 // Componente Principal de la Aplicación
@@ -20,9 +22,11 @@ const App = () => {
   const [activeFilter, setActiveFilter] = useState<string>(FILTERS.MOTION_BLUR);
   const [filterSettings, setFilterSettings] = useState<any>({
     motionBlur: { pointX: 50, pointY: 50, intensity: 15 },
-    depthBlur: { intensity: 8, maskPath: null, analyzing: false },
+    depthBlur: { intensity: 8, maskPath: null, analyzing: false, feather: 10, expansion: 0 },
     textOverlay: { text: 'Tu texto aquí', blur: false },
     structure: { complexity: 50, dynamism: 30, fragmentation: 20, color: '#000000', points: [] },
+    gamma: { factor: 100, algorithm: 50 },
+    glitch: { algorithm: 1, intensity: 10 },
   });
   const [colorSettings, setColorSettings] = useState({ saturation: 100, contrast: 100, exposure: 100 });
   const [isLoading, setIsLoading] = useState(false);
@@ -204,7 +208,7 @@ const App = () => {
     
     // Crear canvas temporal para manipulación
     const tempCanvas = document.createElement('canvas');
-    const tempCtx = tempCanvas.getContext('2d');
+    const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
     if(!tempCtx) return;
     tempCanvas.width = targetCanvas.width;
     tempCanvas.height = targetCanvas.height;
@@ -246,96 +250,104 @@ const App = () => {
     switch (activeFilter) {
       case FILTERS.MOTION_BLUR:
         const { pointX, pointY, intensity } = filterSettings.motionBlur;
-        
-        const blurCanvas = document.createElement('canvas');
-        const blurCtx = blurCanvas.getContext('2d');
-        if (!blurCtx) break;
-        blurCanvas.width = targetCanvas.width;
-        blurCanvas.height = targetCanvas.height;
-
-        const numDraws = Math.max(2, Math.floor(intensity / 2));
-        const blurAmount = intensity * 0.75;
-        blurCtx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
-        blurCtx.globalAlpha = 1 / numDraws;
-        for(let i = 0; i < numDraws; i++) {
-          const offset = (i / (numDraws - 1) - 0.5) * blurAmount * 2;
-          blurCtx.drawImage(tempCanvas, offset, 0);
+        if (intensity === 0) {
+            ctx.drawImage(tempCanvas, 0, 0);
+            break;
         }
-        blurCtx.globalAlpha = 1;
+        
+        const centerX = targetCanvas.width * (pointX / 100);
+        const centerY = targetCanvas.height * (pointY / 100);
+        const numSamples = 20; // Number of layers for the blur effect
+        const maxZoom = 1 + (intensity / 100) * 0.5; // Intensity from 0-50 maps to zoom from 1.0 to 1.25
         
         ctx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
-        ctx.drawImage(tempCanvas, 0, 0);
-
-        const maskCanvas = document.createElement('canvas');
-        const maskCtx = maskCanvas.getContext('2d');
-        if (!maskCtx) break;
-        maskCanvas.width = targetCanvas.width;
-        maskCanvas.height = targetCanvas.height;
-
-        const focusCenterX = targetCanvas.width * (pointX / 100);
-        const focusCenterY = targetCanvas.height * (pointY / 100);
-        const focusRadiusX = targetCanvas.width * 0.15;
-        const focusRadiusY = targetCanvas.height * 0.4;
+        ctx.globalAlpha = 1 / numSamples;
         
-        maskCtx.fillStyle = 'black';
-        maskCtx.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
-        maskCtx.globalCompositeOperation = 'destination-out';
-
-        const sharpEllipseCanvas = document.createElement('canvas');
-        const sharpEllipseCtx = sharpEllipseCanvas.getContext('2d');
-        if(!sharpEllipseCtx) break;
-        sharpEllipseCanvas.width = targetCanvas.width;
-        sharpEllipseCanvas.height = targetCanvas.height;
-        sharpEllipseCtx.fillStyle = 'black';
-        sharpEllipseCtx.beginPath();
-        sharpEllipseCtx.ellipse(focusCenterX, focusCenterY, focusRadiusX, focusRadiusY, 0, 0, 2 * Math.PI);
-        sharpEllipseCtx.fill();
+        // Draw the image multiple times, each slightly more zoomed
+        for (let i = 0; i < numSamples; i++) {
+            const zoom = 1 + (maxZoom - 1) * (i / (numSamples - 1));
+            
+            const scaledWidth = targetCanvas.width * zoom;
+            const scaledHeight = targetCanvas.height * zoom;
+            
+            // Calculate position to keep the center point aligned
+            const newX = centerX - (centerX * zoom);
+            const newY = centerY - (centerY * zoom);
+            
+            ctx.drawImage(
+                tempCanvas,
+                newX,
+                newY,
+                scaledWidth,
+                scaledHeight
+            );
+        }
         
-        maskCtx.filter = 'blur(25px)';
-        maskCtx.drawImage(sharpEllipseCanvas, 0, 0);
-        maskCtx.filter = 'none';
-
-        const maskedBlurCanvas = document.createElement('canvas');
-        const maskedBlurCtx = maskedBlurCanvas.getContext('2d');
-        if (!maskedBlurCtx) break;
-        maskedBlurCanvas.width = targetCanvas.width;
-        maskedBlurCanvas.height = targetCanvas.height;
-        maskedBlurCtx.drawImage(blurCanvas, 0, 0);
-        maskedBlurCtx.globalCompositeOperation = 'destination-in';
-        maskedBlurCtx.drawImage(maskCanvas, 0, 0);
-
-        ctx.drawImage(maskedBlurCanvas, 0, 0);
+        ctx.globalAlpha = 1.0; // Reset alpha
         break;
 
       case FILTERS.PORTRAIT_BLUR_AI:
-        const { intensity: depthIntensity, maskPath } = filterSettings.depthBlur;
+        const { intensity: depthIntensity, maskPath, feather, expansion } = filterSettings.depthBlur;
 
         if (!maskPath) {
-            // Si no hay máscara, simplemente dibuja la imagen original sin desenfoque
-            ctx.drawImage(tempCanvas, 0, 0);
+            ctx.drawImage(tempCanvas, 0, 0); // Si no hay máscara, dibuja la imagen original
         } else {
-            // Lógica de desenfoque con máscara
+            // 1. Dibuja el fondo desenfocado
             ctx.save();
-            
-            // 1. Dibuja la versión desenfocada en todo el canvas
             ctx.filter = `blur(${depthIntensity}px)`;
             ctx.drawImage(tempCanvas, 0, 0, targetCanvas.width, targetCanvas.height);
             ctx.filter = 'none';
+            ctx.restore();
 
-            // 2. Crea un clip a partir de la ruta SVG
+            // 2. Crea la máscara con expansión y suavizado
+            const maskRenderCanvas = document.createElement('canvas');
+            maskRenderCanvas.width = targetCanvas.width;
+            maskRenderCanvas.height = targetCanvas.height;
+            const maskRenderCtx = maskRenderCanvas.getContext('2d');
+            if (!maskRenderCtx) break;
+
             const path = new Path2D(maskPath);
             const scaleX = targetCanvas.width / 100;
             const scaleY = targetCanvas.height / 100;
-            // Declaración explícita del tipo para la matriz
             const matrix: DOMMatrixInit = { m11: scaleX, m12: 0, m21: 0, m22: scaleY, m41: 0, m42: 0 };
             const scaledPath = new Path2D();
             scaledPath.addPath(path, matrix);
-            ctx.clip(scaledPath);
-
-            // 3. Dibuja la imagen nítida original encima, que solo aparecerá dentro del clip
-            ctx.drawImage(tempCanvas, 0, 0);
             
-            ctx.restore(); // Restaura el contexto para eliminar el clip
+            // Aplicar expansión/contracción
+            maskRenderCtx.fillStyle = 'black';
+            maskRenderCtx.strokeStyle = 'black';
+            maskRenderCtx.lineWidth = Math.abs(expansion) * 2; // *2 porque el stroke es centrado
+
+            if (expansion >= 0) {
+                if(expansion > 0) maskRenderCtx.stroke(scaledPath);
+                maskRenderCtx.fill(scaledPath);
+            } else {
+                maskRenderCtx.fill(scaledPath);
+                maskRenderCtx.globalCompositeOperation = 'destination-out';
+                maskRenderCtx.stroke(scaledPath);
+                maskRenderCtx.globalCompositeOperation = 'source-over';
+            }
+
+            // Aplicar suavizado (feather)
+            if (feather > 0) {
+                maskRenderCtx.filter = `blur(${feather}px)`;
+                maskRenderCtx.drawImage(maskRenderCanvas, 0, 0); // Dibuja sobre sí mismo para aplicar el filtro
+                maskRenderCtx.filter = 'none';
+            }
+
+            // 3. Crea una capa con el sujeto nítido usando la máscara
+            const sharpSubjectCanvas = document.createElement('canvas');
+            sharpSubjectCanvas.width = targetCanvas.width;
+            sharpSubjectCanvas.height = targetCanvas.height;
+            const sharpCtx = sharpSubjectCanvas.getContext('2d');
+            if (!sharpCtx) break;
+            
+            sharpCtx.drawImage(tempCanvas, 0, 0); // Dibuja la imagen nítida
+            sharpCtx.globalCompositeOperation = 'destination-in';
+            sharpCtx.drawImage(maskRenderCanvas, 0, 0); // Aplica la máscara
+
+            // 4. Dibuja el sujeto nítido sobre el fondo desenfocado
+            ctx.drawImage(sharpSubjectCanvas, 0, 0);
         }
         break;
 
@@ -418,6 +430,112 @@ const App = () => {
             ctx.fillRect(x, y, size, size);
         }
         ctx.globalAlpha = 1.0;
+        break;
+    
+      case FILTERS.GAMMA:
+        const { factor, algorithm } = filterSettings.gamma;
+        const gamma = Math.max(0.1, factor / 100);
+        if (factor === 100) {
+            ctx.drawImage(tempCanvas, 0, 0);
+            break;
+        };
+
+        const gammaImageData = tempCtx.getImageData(0, 0, targetCanvas.width, targetCanvas.height);
+        const gammaData = gammaImageData.data;
+        const mix = algorithm / 100;
+
+        const lut = new Uint8Array(256);
+        for (let i = 0; i < 256; i++) {
+            const val = i / 255;
+            const correctedVal = Math.pow(val, 1 / gamma);
+            
+            // Algoritmo de curva "protegida" usando smoothstep
+            const t = val;
+            const smoothVal = t * t * (3 - 2 * t);
+            const protectedCorrectedVal = Math.pow(smoothVal, 1 / gamma);
+            
+            const finalVal = correctedVal * (1 - mix) + protectedCorrectedVal * mix;
+            lut[i] = finalVal * 255;
+        }
+
+        for (let i = 0; i < gammaData.length; i += 4) {
+            gammaData[i] = lut[gammaData[i]];
+            gammaData[i+1] = lut[gammaData[i+1]];
+            gammaData[i+2] = lut[gammaData[i+2]];
+        }
+        ctx.putImageData(gammaImageData, 0, 0);
+        break;
+
+      case FILTERS.GLITCH:
+        const { algorithm: glitchAlgo, intensity: glitchIntensity } = filterSettings.glitch;
+        if (glitchIntensity > 0) {
+            const glitchImageData = tempCtx.getImageData(0, 0, targetCanvas.width, targetCanvas.height);
+            const glitchData = glitchImageData.data;
+            const originalData = new Uint8ClampedArray(glitchData);
+            const width = targetCanvas.width;
+            const height = targetCanvas.height;
+            const random = (min, max) => Math.random() * (max - min) + min;
+
+            // Paso 1: Desfase de canales
+            if (glitchAlgo >= 1) {
+                const shift = Math.floor((glitchIntensity / 100) * 15);
+                for (let i = 0; i < glitchData.length; i += 4) {
+                    glitchData[i] = originalData[i + shift * 4] || originalData[i];
+                    glitchData[i + 2] = originalData[i - shift * 4 + 2] || originalData[i+2];
+                }
+            }
+
+            // Paso 2: Desplazamiento de bloques
+            if (glitchAlgo >= 2) {
+                const numSlices = Math.floor((glitchIntensity / 100) * 20);
+                for (let i = 0; i < numSlices; i++) {
+                    const sliceHeight = Math.floor(random(1, height / 10));
+                    const startY = Math.floor(random(0, height - sliceHeight));
+                    const offset = Math.floor(random(-width * 0.1, width * 0.1) * (glitchIntensity / 100));
+
+                    for (let y = startY; y < startY + sliceHeight; y++) {
+                        const rowStart = y * width * 4;
+                        const rowData = originalData.slice(rowStart, rowStart + width * 4);
+                        const newRow = new Uint8ClampedArray(width * 4);
+                        for(let j=0; j<width*4; j++){
+                            newRow[j] = rowData[(j + offset * 4 + width*4) % (width*4)];
+                        }
+                        glitchData.set(newRow, rowStart);
+                    }
+                }
+            }
+             // Paso 3: Líneas de escaneo
+            if (glitchAlgo >= 3) {
+                 for (let y = 0; y < height; y += 4) {
+                     for (let x = 0; x < width; x++) {
+                         const i = (y * width + x) * 4;
+                         const darken = (glitchIntensity / 100) * 60;
+                         glitchData[i] = Math.max(0, glitchData[i] - darken);
+                         glitchData[i+1] = Math.max(0, glitchData[i+1] - darken);
+                         glitchData[i+2] = Math.max(0, glitchData[i+2] - darken);
+                     }
+                }
+            }
+             // Paso 4: Corrupción de datos
+            if (glitchAlgo >= 4) {
+                ctx.putImageData(glitchImageData, 0, 0); // Poner datos actuales para poder copiar bloques
+                const numCorruptions = Math.floor((glitchIntensity / 100) * 25);
+                for (let i = 0; i < numCorruptions; i++) {
+                    const sx = Math.floor(random(0, width));
+                    const sy = Math.floor(random(0, height));
+                    const sw = Math.floor(random(10, width/4));
+                    const sh = Math.floor(random(1, 20));
+                    const dx = Math.floor(random(0, width));
+                    const dy = Math.floor(random(0, height));
+                    ctx.drawImage(targetCanvas, sx, sy, sw, sh, dx, dy, sw, sh);
+                }
+            } else {
+                 ctx.putImageData(glitchImageData, 0, 0);
+            }
+
+        } else {
+            ctx.drawImage(tempCanvas, 0, 0);
+        }
         break;
     }
     ctx.restore();
@@ -675,9 +793,19 @@ const App = () => {
                       {d.analyzing ? 'Analizando...' : 'Generar Máscara de Foco'}
                   </button>
                   { d.maskPath && !d.analyzing && (
-                      <div className="animate-fadeIn">
-                          <label className="block mt-4 mb-1 text-sm text-gray-600">Intensidad Desenfoque: {d.intensity}</label>
-                          <input type="range" min="0" max="20" value={d.intensity} onChange={(e) => updateSettings('depthBlur', { intensity: parseInt(e.target.value) })} className="w-full" />
+                      <div className="animate-fadeIn space-y-4 pt-4 border-t border-gray-200">
+                           <div>
+                                <label className="block mb-1 text-sm text-gray-600">Intensidad Desenfoque: {d.intensity}</label>
+                                <input type="range" min="0" max="20" value={d.intensity} onChange={(e) => updateSettings('depthBlur', { intensity: parseInt(e.target.value) })} className="w-full" />
+                           </div>
+                           <div>
+                                <label className="block mb-1 text-sm text-gray-600">Suavizado de Bordes: {d.feather}</label>
+                                <input type="range" min="0" max="50" step="1" value={d.feather} onChange={(e) => updateSettings('depthBlur', { feather: parseInt(e.target.value) })} className="w-full" />
+                           </div>
+                           <div>
+                                <label className="block mb-1 text-sm text-gray-600">Expansión de Máscara: {d.expansion}</label>
+                                <input type="range" min="-50" max="50" step="1" value={d.expansion} onChange={(e) => updateSettings('depthBlur', { expansion: parseInt(e.target.value) })} className="w-full" />
+                           </div>
                       </div>
                   )}
               </>);
@@ -715,6 +843,25 @@ const App = () => {
                 <label className="block mt-4 mb-1 text-sm text-gray-600">Color</label>
                 <input type="color" value={st.color} onChange={(e) => updateSettings('structure', { color: e.target.value })} className="w-full bg-white border border-gray-300 h-10" />
             </>);
+          case FILTERS.GAMMA:
+              const g = filterSettings.gamma;
+              return (<>
+                  <h3 className="text-lg font-semibold mb-2">Corrección de Gama</h3>
+                  <label className="block mb-1 text-sm text-gray-600">Intensidad: {(g.factor / 100).toFixed(2)}</label>
+                  <input type="range" min="10" max="300" value={g.factor} onChange={(e) => updateSettings('gamma', { factor: parseInt(e.target.value) })} className="w-full" />
+                  <label className="block mt-4 mb-1 text-sm text-gray-600">Algoritmo (Curva): {g.algorithm}%</label>
+                  <input type="range" min="0" max="100" value={g.algorithm} onChange={(e) => updateSettings('gamma', { algorithm: parseInt(e.target.value) })} className="w-full" />
+              </>);
+          case FILTERS.GLITCH:
+              const gl = filterSettings.glitch;
+              const glitchLabels = ["1: Desfase Canales", "2: +Bloques", "3: +Líneas", "4: +Corrupción"];
+              return (<>
+                  <h3 className="text-lg font-semibold mb-2">Glitch</h3>
+                  <label className="block mb-1 text-sm text-gray-600">Algoritmo: {glitchLabels[gl.algorithm - 1]}</label>
+                  <input type="range" min="1" max="4" step="1" value={gl.algorithm} onChange={(e) => updateSettings('glitch', { algorithm: parseInt(e.target.value) })} className="w-full" />
+                  <label className="block mt-4 mb-1 text-sm text-gray-600">Intensidad: {gl.intensity}%</label>
+                  <input type="range" min="0" max="100" value={gl.intensity} onChange={(e) => updateSettings('glitch', { intensity: parseInt(e.target.value) })} className="w-full" />
+              </>);
           default: return null;
       }
   };

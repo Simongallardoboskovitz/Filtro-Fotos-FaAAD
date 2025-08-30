@@ -8,7 +8,7 @@ declare const heic2any: any;
 // Constantes de Filtros
 const FILTERS = {
   MOTION_BLUR: 'Desenfoque de Movimiento',
-  DEPTH_BLUR: 'Desenfoque de Profundidad',
+  PORTRAIT_BLUR_AI: 'Desenfoque de Retrato (IA)',
   TEXT_OVERLAY: 'Superposición de Texto',
   STRUCTURE: 'Análisis Estructural',
 };
@@ -20,7 +20,7 @@ const App = () => {
   const [activeFilter, setActiveFilter] = useState<string>(FILTERS.MOTION_BLUR);
   const [filterSettings, setFilterSettings] = useState<any>({
     motionBlur: { pointX: 50, pointY: 50, intensity: 15 },
-    depthBlur: { intensity: 5, focus: 50, invert: false, centerX: 50, centerY: 50 },
+    depthBlur: { intensity: 8, maskPath: null, analyzing: false },
     textOverlay: { text: 'Tu texto aquí', blur: false },
     structure: { complexity: 50, dynamism: 30, fragmentation: 20, color: '#000000', points: [] },
   });
@@ -31,6 +31,9 @@ const App = () => {
   const [framingSettings, setFramingSettings] = useState({ scale: 1, offsetX: 0, offsetY: 0 });
   const [isFramingOpen, setIsFramingOpen] = useState(true);
   const [isColorOpen, setIsColorOpen] = useState(true);
+  const [isHalftoneOpen, setIsHalftoneOpen] = useState(false);
+  const [isHalftoneEnabled, setIsHalftoneEnabled] = useState(false);
+  const [halftoneSettings, setHalftoneSettings] = useState({ dotSize: 8, spacing: 8 });
   const [customFont, setCustomFont] = useState<{ name: string; url: string | null }>({ name: "'Necto Mono', monospace", url: null });
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement>(new Image());
@@ -74,6 +77,7 @@ const App = () => {
     if (file.type.startsWith('image/')) {
       // Reiniciar puntos y reencuadre al cargar nueva imagen
       updateSettings('structure', { points: [] });
+      updateSettings('depthBlur', { maskPath: null });
       handleFramingChange('original');
       setImage(file);
       setImageUrl(URL.createObjectURL(file));
@@ -303,40 +307,36 @@ const App = () => {
         ctx.drawImage(maskedBlurCanvas, 0, 0);
         break;
 
-      case FILTERS.DEPTH_BLUR:
-        const { intensity: depthIntensity, focus, invert, centerX, centerY } = filterSettings.depthBlur;
-        
-        // Limpiar canvas y dibujar imagen desenfocada
-        ctx.clearRect(0,0,targetCanvas.width, targetCanvas.height);
-        ctx.filter = `blur(${depthIntensity}px)`;
-        ctx.drawImage(tempCanvas, 0, 0, targetCanvas.width, targetCanvas.height);
-        
-        // Preparar máscara de gradiente
-        const gradientCenterX = targetCanvas.width * (centerX / 100);
-        const gradientCenterY = targetCanvas.height * (centerY / 100);
-        const focusSize = (100 - focus) * 0.005 * Math.min(targetCanvas.width, targetCanvas.height);
-        const gradientRadius = focusSize + 150;
-        
-        const gradient = ctx.createRadialGradient(
-            gradientCenterX, gradientCenterY, Math.max(0, focusSize), 
-            gradientCenterX, gradientCenterY, Math.max(1, gradientRadius)
-        );
+      case FILTERS.PORTRAIT_BLUR_AI:
+        const { intensity: depthIntensity, maskPath } = filterSettings.depthBlur;
 
-        if (invert) {
-            gradient.addColorStop(0, "rgba(0,0,0,1)");
-            gradient.addColorStop(1, "rgba(0,0,0,0)");
+        if (!maskPath) {
+            // Si no hay máscara, simplemente dibuja la imagen original sin desenfoque
+            ctx.drawImage(tempCanvas, 0, 0);
         } else {
-            gradient.addColorStop(0, "rgba(0,0,0,0)");
-            gradient.addColorStop(1, "rgba(0,0,0,1)");
-        }
+            // Lógica de desenfoque con máscara
+            ctx.save();
+            
+            // 1. Dibuja la versión desenfocada en todo el canvas
+            ctx.filter = `blur(${depthIntensity}px)`;
+            ctx.drawImage(tempCanvas, 0, 0, targetCanvas.width, targetCanvas.height);
+            ctx.filter = 'none';
 
-        ctx.filter = 'none';
-        ctx.globalCompositeOperation = "destination-in";
-        ctx.fillStyle = gradient;
-        ctx.fillRect(0,0,targetCanvas.width, targetCanvas.height);
-        
-        ctx.globalCompositeOperation = "destination-over";
-        ctx.drawImage(tempCanvas,0,0);
+            // 2. Crea un clip a partir de la ruta SVG
+            const path = new Path2D(maskPath);
+            const scaleX = targetCanvas.width / 100;
+            const scaleY = targetCanvas.height / 100;
+            // Declaración explícita del tipo para la matriz
+            const matrix: DOMMatrixInit = { m11: scaleX, m12: 0, m21: 0, m22: scaleY, m41: 0, m42: 0 };
+            const scaledPath = new Path2D();
+            scaledPath.addPath(path, matrix);
+            ctx.clip(scaledPath);
+
+            // 3. Dibuja la imagen nítida original encima, que solo aparecerá dentro del clip
+            ctx.drawImage(tempCanvas, 0, 0);
+            
+            ctx.restore(); // Restaura el contexto para eliminar el clip
+        }
         break;
 
       case FILTERS.TEXT_OVERLAY:
@@ -422,7 +422,48 @@ const App = () => {
     }
     ctx.restore();
 
-    // 4. Aplicar granulado
+    // 4. Aplicar Semitono
+    if (isHalftoneEnabled) {
+        const { dotSize, spacing } = halftoneSettings;
+        if (spacing > 0) {
+            const imageData = ctx.getImageData(0, 0, targetCanvas.width, targetCanvas.height);
+            const data = imageData.data;
+            const width = targetCanvas.width;
+            const height = targetCanvas.height;
+    
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, width, height);
+            ctx.fillStyle = 'black';
+    
+            for (let y = 0; y < height; y += spacing) {
+                for (let x = 0; x < width; x += spacing) {
+                    let totalBrightness = 0;
+                    let pixelCount = 0;
+                    for (let blockY = y; blockY < y + spacing && blockY < height; blockY++) {
+                        for (let blockX = x; blockX < x + spacing && blockX < width; blockX++) {
+                            const index = (blockY * width + blockX) * 4;
+                            const r = data[index];
+                            const g = data[index + 1];
+                            const b = data[index + 2];
+                            totalBrightness += (0.299 * r + 0.587 * g + 0.114 * b);
+                            pixelCount++;
+                        }
+                    }
+            
+                    const avgBrightness = (totalBrightness / pixelCount) / 255;
+                    const radius = (dotSize / 2) * (1 - avgBrightness);
+            
+                    if (radius > 0) {
+                        ctx.beginPath();
+                        ctx.arc(x + spacing / 2, y + spacing / 2, radius, 0, 2 * Math.PI, true);
+                        ctx.fill();
+                    }
+                }
+            }
+        }
+    }
+
+    // 5. Aplicar granulado
     const finalImageData = ctx.getImageData(0, 0, targetCanvas.width, targetCanvas.height);
     const finalData = finalImageData.data;
     const grainAmount = 25;
@@ -433,7 +474,7 @@ const App = () => {
         finalData[i+2] = Math.max(0, Math.min(255, finalData[i+2] + grain));
     }
     ctx.putImageData(finalImageData, 0, 0);
-  }, [activeFilter, filterSettings, colorSettings, customFont, framingSettings]);
+  }, [activeFilter, filterSettings, colorSettings, customFont, framingSettings, isHalftoneEnabled, halftoneSettings]);
 
 
   // Hook principal para renderizar el canvas visible
@@ -455,8 +496,45 @@ const App = () => {
     } else {
       render();
     }
-  }, [imageUrl, applyAllEffects, framingOption, filterSettings, colorSettings, activeFilter, customFont, framingSettings]);
+  }, [imageUrl, applyAllEffects, framingOption, filterSettings, colorSettings, activeFilter, customFont, framingSettings, isHalftoneEnabled, halftoneSettings]);
   
+    const generateFocusMask = useCallback(async () => {
+        if (!image || isLoading) return;
+        updateSettings('depthBlur', { analyzing: true });
+        setIsLoading(true);
+        setLoadingMessage('Generando máscara de foco con IA...');
+        try {
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+            const reader = new FileReader();
+            reader.readAsDataURL(image);
+            reader.onloadend = async () => {
+                const base64data = (reader.result as string).split(',')[1];
+                const response = await ai.models.generateContent({
+                    model: 'gemini-2.5-flash',
+                    contents: { parts: [
+                        { text: `Analiza esta imagen e identifica el sujeto principal en primer plano. Genera una cadena de datos de ruta SVG (el atributo 'd') que delinee a este sujeto. La ruta debe estar escalada para un viewBox de 100x100. Responde con un objeto JSON que contenga una única clave: "svgPath". Ejemplo: {"svgPath": "M10 80 Q 52.5 10, 95 80 Z"}.` },
+                        { inlineData: { mimeType: image.type, data: base64data } }
+                    ]},
+                    config: { responseMimeType: "application/json", responseSchema: {
+                        type: Type.OBJECT, properties: { svgPath: { type: Type.STRING } }, required: ['svgPath']
+                    }}
+                });
+                const jsonText = response.text.trim();
+                const result = JSON.parse(jsonText);
+                if (result.svgPath) {
+                    updateSettings('depthBlur', { maskPath: result.svgPath });
+                }
+            };
+        } catch (error) {
+            console.error("Error generando la máscara de foco:", error);
+            alert("Hubo un error al generar la máscara de foco con la IA.");
+        } finally {
+            updateSettings('depthBlur', { analyzing: false });
+            setIsLoading(false);
+            setLoadingMessage('');
+        }
+    }, [image, isLoading]);
+
   // Analizar estructura con Gemini
   const analyzeStructure = useCallback(async () => {
     if (!image || isLoading) return;
@@ -471,13 +549,13 @@ const App = () => {
             const response = await ai.models.generateContent({
                 model: 'gemini-2.5-flash',
                 contents: { parts: [
-                    { text: `Analiza esta imagen e identifica entre 30 y 50 nodos estructurales clave. Estos nodos deben anclarse en las áreas de mayor contraste que definen los contornos de objetos y sujetos. Devuelve un objeto JSON con una única clave "points", que es un array de objetos. Cada objeto debe tener las propiedades "x" e "y" con coordenadas normalizadas (de 0 a 1). Ejemplo: {"points": [{"x": 0.5, "y": 0.25}]}` },
+                    { text: `Analiza esta imagen e identifica nodos estructurales clave. Estos nodos deben anclarse en las áreas de mayor contraste que definen aspectos relevantes de la foto, como los bordes nítidos de objetos y sujetos. Prioriza puntos en extremidades y partes del cuerpo humano, así como en objetos predominantes con contornos definidos (plantas, árboles, sillas, edificios, etc.), tanto humanos como no humanos. Devuelve la respuesta como un objeto JSON con una única clave "points", que es un array de objetos. Cada objeto debe tener propiedades "x" e "y" que representen coordenadas normalizadas (de 0 a 1). Ejemplo: {"points": [{"x": 0.5, "y": 0.25}]}. Proporciona al menos 30 puntos si es posible.` },
                     { inlineData: { mimeType: image.type, data: base64data } }
                 ]},
                 config: { responseMimeType: "application/json", responseSchema: {
                     type: Type.OBJECT, properties: { points: { type: Type.ARRAY, items: {
-                        type: Type.OBJECT, properties: { x: { type: Type.NUMBER }, y: { type: Type.NUMBER } }
-                    }}}
+                        type: Type.OBJECT, properties: { x: { type: Type.NUMBER }, y: { type: Type.NUMBER } }, required: ['x', 'y']
+                    }}}, required: ['points']
                 }}
             });
             const jsonText = response.text.trim();
@@ -584,22 +662,24 @@ const App = () => {
                   <label className="block mt-4 mb-1 text-sm text-gray-600">Intensidad: {s.intensity}</label>
                   <input type="range" min="0" max="50" value={s.intensity} onChange={(e) => updateSettings('motionBlur', { intensity: parseInt(e.target.value) })} className="w-full" />
               </>);
-          case FILTERS.DEPTH_BLUR:
+          case FILTERS.PORTRAIT_BLUR_AI:
               const d = filterSettings.depthBlur;
               return (<>
-                  <h3 className="text-lg font-semibold mb-2">Profundidad de Campo</h3>
-                  <label className="block mb-1 text-sm text-gray-600">Intensidad Desenfoque: {d.intensity}</label>
-                  <input type="range" min="0" max="20" value={d.intensity} onChange={(e) => updateSettings('depthBlur', { intensity: parseInt(e.target.value) })} className="w-full" />
-                  <label className="block mt-4 mb-1 text-sm text-gray-600">Profundidad de Foco: {d.focus}</label>
-                  <input type="range" min="0" max="100" value={d.focus} onChange={(e) => updateSettings('depthBlur', { focus: parseInt(e.target.value) })} className="w-full" />
-                  <label className="block mt-4 mb-1 text-sm text-gray-600">Posición Foco X: {d.centerX}</label>
-                  <input type="range" min="0" max="100" value={d.centerX} onChange={(e) => updateSettings('depthBlur', { centerX: parseInt(e.target.value) })} className="w-full" />
-                  <label className="block mt-4 mb-1 text-sm text-gray-600">Posición Foco Y: {d.centerY}</label>
-                  <input type="range" min="0" max="100" value={d.centerY} onChange={(e) => updateSettings('depthBlur', { centerY: parseInt(e.target.value) })} className="w-full" />
-                  <div className="flex items-center mt-4">
-                    <input type="checkbox" id="depthBlurInvert" checked={d.invert} onChange={(e) => updateSettings('depthBlur', { invert: e.target.checked })} className="mr-2 h-4 w-4 accent-black" />
-                    <label htmlFor="depthBlurInvert" className="text-sm">Invertir Desenfoque</label>
-                  </div>
+                  <h3 className="text-lg font-semibold mb-2">Desenfoque de Retrato (IA)</h3>
+                  <p className="text-sm text-gray-500 mb-4">Utiliza IA para detectar el sujeto principal y desenfocar el fondo, creando un efecto de profundidad de campo.</p>
+                  <button 
+                      onClick={generateFocusMask}
+                      disabled={d.analyzing}
+                      className="w-full bg-black text-white font-semibold py-2 px-4 mb-4 transition-colors duration-200 hover:bg-gray-800 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                  >
+                      {d.analyzing ? 'Analizando...' : 'Generar Máscara de Foco'}
+                  </button>
+                  { d.maskPath && !d.analyzing && (
+                      <div className="animate-fadeIn">
+                          <label className="block mt-4 mb-1 text-sm text-gray-600">Intensidad Desenfoque: {d.intensity}</label>
+                          <input type="range" min="0" max="20" value={d.intensity} onChange={(e) => updateSettings('depthBlur', { intensity: parseInt(e.target.value) })} className="w-full" />
+                      </div>
+                  )}
               </>);
           case FILTERS.TEXT_OVERLAY:
             const t = filterSettings.textOverlay;
@@ -647,7 +727,7 @@ const App = () => {
       </header>
       <main className="flex-grow grid grid-cols-1 lg:grid-cols-3 gap-8 animate-fadeIn">
         <div className="lg:col-span-2 bg-gray-100 p-2 flex justify-center items-center min-h-[400px] lg:h-auto transition-all duration-500 relative">
-          {isLoading && !imageUrl && (
+          {isLoading && (
             <div className="absolute inset-0 bg-white bg-opacity-80 flex justify-center items-center z-10">
                 <p className="text-gray-600 text-xl animate-pulse">{loadingMessage || 'Procesando...'}</p>
             </div>
@@ -726,6 +806,35 @@ const App = () => {
                     </div>
                 </div>
                 <div key={activeFilter} className="flex-grow mb-6 animate-fadeIn">{renderControls()}</div>
+                <div className="mb-6">
+                    <button 
+                        onClick={() => setIsHalftoneOpen(!isHalftoneOpen)}
+                        className="w-full flex justify-between items-center text-left text-lg font-semibold mb-3 p-2 hover:bg-gray-100 transition-colors"
+                    >
+                        Semitono
+                        <svg className={`w-5 h-5 transition-transform duration-300 ${isHalftoneOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+                    </button>
+                    {isHalftoneOpen && (
+                        <div className="animate-fadeIn space-y-4">
+                            <div className="flex items-center">
+                                <input type="checkbox" id="halftone-enable" checked={isHalftoneEnabled} onChange={(e) => setIsHalftoneEnabled(e.target.checked)} className="mr-2 h-4 w-4 accent-black" />
+                                <label htmlFor="halftone-enable" className="text-sm">Activar efecto Semitono</label>
+                            </div>
+                            {isHalftoneEnabled && (
+                                <div className="pt-4 mt-4 border-t border-gray-200 animate-fadeIn space-y-4">
+                                    <div>
+                                        <label className="block mb-1 text-sm text-gray-600">Tamaño del punto: {halftoneSettings.dotSize}</label>
+                                        <input type="range" min="2" max="40" step="1" value={halftoneSettings.dotSize} onChange={(e) => setHalftoneSettings(prev => ({ ...prev, dotSize: parseInt(e.target.value) }))} className="w-full" />
+                                    </div>
+                                    <div>
+                                        <label className="block mt-4 mb-1 text-sm text-gray-600">Espaciado: {halftoneSettings.spacing}</label>
+                                        <input type="range" min="2" max="40" step="1" value={halftoneSettings.spacing} onChange={(e) => setHalftoneSettings(prev => ({ ...prev, spacing: parseInt(e.target.value) }))} className="w-full" />
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
                 <button onClick={exportToPNG} className="w-full bg-black hover:bg-gray-800 text-white font-bold py-3 px-4 transition-colors duration-200">Exportar a PNG</button>
             </div>
           ) : (<p className="text-gray-500 text-center mt-8 animate-fadeIn">Sube una imagen para empezar a editar.</p>)}
